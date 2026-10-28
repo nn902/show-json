@@ -4,12 +4,13 @@ import html
 import logging
 import sqlite3
 import time
-from datetime import datetime, timedelta
+import re
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, BufferedInputFile
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 
 # --- НАСТРОЙКИ ---
 TOKEN = os.getenv("BOT_TOKEN", "ТВОЙ_ТОКЕН_СЮДА")
@@ -60,43 +61,100 @@ def set_vip(user_id: int, days: int = 30):
     conn.close()
 
 # ==============================================================================
-# 📥 ОСНОВНОЙ ОБРАБОТЧИК JSON
+# 🧠 ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ==============================================================================
+
+def extract_chat_target(text: str):
+    """Ищет @username или ссылку t.me в тексте"""
+    if not text:
+        return None
+        
+    # Проверка на @username
+    if text.startswith("@"):
+        return text.split()[0]
+        
+    # Проверка на публичные ссылки (t.me/username)
+    match = re.search(r't\.me/([a-zA-Z0-9_]+)', text)
+    if match:
+        return "@" + match.group(1)
+        
+    # Проверка на приватные инвайт-ссылки (t.me/+hash)
+    match_invite = re.search(r't\.me/(\+[a-zA-Z0-9_-]+)', text)
+    if match_invite:
+        return match_invite.group(1)
+        
+    return None
+
+# ==============================================================================
+# 📥 ОСНОВНОЙ ОБРАБОТЧИК
 # ==============================================================================
 @router.message()
 async def handle_any_message(message: Message):
+    user_id = message.from_user.id
+    is_user_vip = is_vip(user_id)
+
+    # --- 1. ПАРСЕР СТИКЕРОВ ---
+    if message.sticker:
+        sticker = message.sticker
+        sticker_info = (
+            f"🎨 <b>Данные стикера:</b>\n"
+            f"🆔 File ID:\n<code>{sticker.file_id}</code>\n"
+            f"🔗 Unique ID:\n<code>{sticker.file_unique_id}</code>\n"
+            f"🎭 Эмодзи: {sticker.emoji or 'Нет'}\n"
+            f"📦 Набор: {sticker.set_name or 'Кастомный'}"
+        )
+        await message.reply(sticker_info, parse_mode="HTML")
+
+    # --- 2. ПАРСЕР ССЫЛОК НА ЧАТЫ/КАНАЛЫ ---
+    if message.text:
+        chat_target = extract_chat_target(message.text)
+        if chat_target:
+            try:
+                # Пытаемся получить инфу о чате
+                chat = await bot.get_chat(chat_target)
+                chat_info = (
+                    f"📢 <b>Информация о чате/канале:</b>\n"
+                    f"📝 Название: <b>{html.escape(chat.title or 'Без названия')}</b>\n"
+                    f"📁 Тип: <b>{chat.type}</b>\n"
+                    f"👤 Юзернейм: @{chat.username if chat.username else 'Скрыт'}\n"
+                    f"🆔 ID чата:\n<code>{chat.id}</code>"
+                )
+                await message.answer(chat_info, parse_mode="HTML")
+            except TelegramBadRequest:
+                # Если бот не в чате или ссылка приватная
+                await message.answer(f"⚠️ Не удалось получить данные. Возможно, бот не добавлен в этот чат или ссылка приватная.", parse_mode="HTML")
+            except Exception as e:
+                logging.error(f"Ошибка парсинга чата: {e}")
+
+    # --- 3. ОСНОВНОЙ JSON И ID ---
     try:
-        # 1. Генерируем JSON
         msg_dict = message.model_dump(exclude_none=True, mode='json')
         json_str = json.dumps(msg_dict, indent=2, ensure_ascii=False)
         
-        user_id = message.from_user.id
         chat_id = message.chat.id
-        is_user_vip = is_vip(user_id)
 
-        # 2. Если не VIP, добавляем мини-рекламу прямо в текст JSON (в виде комментария)
+        # Реклама для не-VIP
         if not is_user_vip:
             ad_comment = f'\n\n// 🤖 Сгенерировано в @{BOT_USERNAME}\n// 💎 Убрать рекламу на 30 дней (1 ⭐️) -> нажми кнопку ниже'
             json_str += ad_comment
 
-        # 3. Проверяем длину. Если JSON огромный (больше 3500 символов), отправляем файлом
+        # Отправка JSON
         if len(json_str) > 3500:
             file_data = json_str.encode('utf-8')
             input_file = BufferedInputFile(file_data, filename=f"message_{message.message_id}.json")
-            await message.reply_document(input_file, caption="📁 JSON слишком большой для сообщения, отправляю файлом.")
+            await message.reply_document(input_file, caption="📁 JSON слишком большой, отправляю файлом.")
         else:
-            # Обычный вывод в <pre><code>
             safe_json_str = html.escape(json_str)
             json_block = f"<pre><code class=\"language-json\">{safe_json_str}</code></pre>"
             await message.reply(json_block, parse_mode="HTML")
 
-        # 4. Выводим кликабельные ID
+        # Вывод ID
         ids_block = (
             f"👤 <b>ID отправителя:</b> <code>{user_id}</code>\n"
             f"💬 <b>ID чата:</b> <code>{chat_id}</code>\n"
             f"🆔 <b>Message ID:</b> <code>{message.message_id}</code>"
         )
 
-        # Кнопка для доната, если юзер не VIP
         kb = None
         if not is_user_vip:
             kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -125,7 +183,7 @@ async def process_buy_vip(callback: CallbackQuery):
         title="VIP статус на 30 дней",
         description="Убирает рекламный комментарий из JSON-кода на 30 дней.",
         payload="vip_30_days",
-        provider_token="", # Для Stars всегда пустая строка
+        provider_token="",
         currency="XTR",
         prices=[LabeledPrice(label="VIP на 30 дней", amount=1)]
     )
@@ -137,7 +195,7 @@ async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def process_successful_payment(message: Message):
     user_id = message.from_user.id
-    set_vip(user_id, days=30) # Записываем в БД
+    set_vip(user_id, days=30)
     
     await message.answer(
         "🎉 <b>Оплата прошла успешно!</b>\n\n"
@@ -149,7 +207,7 @@ async def process_successful_payment(message: Message):
 # 🚀 ЗАПУСК
 # ==============================================================================
 async def main():
-    init_db() # Создаем таблицу при старте
+    init_db()
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
     print(f"🚀 @{BOT_USERNAME} запущен!")
