@@ -237,7 +237,8 @@ async def handle_any_message(message: Message, state: FSMContext):
                 )
 
     # --- 3. ПАРСЕР ССЫЛОК НА ЧАТЫ/КАНАЛЫ ---
-      if message.text:
+
+if message.text:
         chat_target = extract_chat_target(message.text)
         if chat_target == "PRIVATE_LINK":
             await message.answer("⚠️ Вы отправили приватную ссылку. Я не могу получить ID закрытого чата, если меня в него не добавили. Отправьте публичную ссылку (t.me/username).", parse_mode="HTML")
@@ -262,7 +263,7 @@ async def handle_any_message(message: Message, state: FSMContext):
                 logging.error(f"Ошибка парсинга чата: {e}")
                 await message.answer("⚠️ Произошла ошибка при получении данных.", parse_mode="HTML")
                 return
-
+                
     # --- 4. ОСНОВНОЙ JSON И ID ---
     try:
         msg_dict = message.model_dump(exclude_none=True, mode='json')
