@@ -237,23 +237,31 @@ async def handle_any_message(message: Message, state: FSMContext):
                 )
 
     # --- 3. ПАРСЕР ССЫЛОК НА ЧАТЫ/КАНАЛЫ ---
-    if message.text:
+      if message.text:
         chat_target = extract_chat_target(message.text)
-        if chat_target:
+        if chat_target == "PRIVATE_LINK":
+            await message.answer("⚠️ Вы отправили приватную ссылку. Я не могу получить ID закрытого чата, если меня в него не добавили. Отправьте публичную ссылку (t.me/username).", parse_mode="HTML")
+            return # Останавливаем обработку
+        elif chat_target:
             try:
                 chat = await bot.get_chat(chat_target)
+                title = html.escape(chat.title) if chat.title else "Без названия"
                 chat_info = (
                     f"📢 <b>Информация о чате/канале:</b>\n"
-                    f"📝 Название: <b>{html.escape(chat.title or 'Без названия')}</b>\n"
+                    f"📝 Название: <b>{title}</b>\n"
                     f"📁 Тип: <b>{chat.type}</b>\n"
                     f"👤 Юзернейм: @{chat.username if chat.username else 'Скрыт'}\n"
                     f"🆔 ID чата:\n<code>{chat.id}</code>"
                 )
                 await message.answer(chat_info, parse_mode="HTML")
+                return # Останавливаем обработку, чтобы не спамить JSON
             except TelegramBadRequest:
-                await message.answer("⚠️ Не удалось получить данные. Бот не добавлен в этот чат или ссылка приватная.", parse_mode="HTML")
+                await message.answer("⚠️ Не удалось получить данные. Убедитесь, что бот добавлен в чат или ссылка верна.", parse_mode="HTML")
+                return
             except Exception as e:
                 logging.error(f"Ошибка парсинга чата: {e}")
+                await message.answer("⚠️ Произошла ошибка при получении данных.", parse_mode="HTML")
+                return
 
     # --- 4. ОСНОВНОЙ JSON И ID ---
     try:
